@@ -4,6 +4,9 @@ import 'dart:async';
 import 'dart:math';
 
 import 'package:flutter/material.dart';
+import 'dart:convert';
+import 'package:crypto/crypto.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter_hbb/common/widgets/audio_input.dart';
 import 'package:flutter_hbb/consts.dart';
 import 'package:flutter_hbb/desktop/widgets/tabbar_widget.dart';
@@ -115,6 +118,83 @@ class ConnectionManagerState extends State<ConnectionManager>
   final RxBool _controlPageBlock = false.obs;
   final RxBool _sidePageBlock = false.obs;
 
+  // 控制是否鎖定 server 設定
+  bool serverLocked = true;
+  final String allowedServerIp = "10.101.11.21";
+
+  void _enforceLockRestrictions() {
+    gFFI.serverModel.clients.removeWhere((client) {
+      if (client.peerId != allowedServerIp) {
+        debugPrint("拒絕非授權 Server：${client.peerId}");
+        return true;
+      }
+      return false;
+    });
+
+    if (gFFI.serverModel.clients.length > 1) {
+      debugPrint("已有活動連線，拒絕多重 session");
+      gFFI.serverModel.clients.removeRange(1, gFFI.serverModel.clients.length);
+    }
+  }
+
+  void _tryUnlockServerSetting(BuildContext context) async {
+    final controller = TextEditingController();
+    final result = await showDialog<bool>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: Text("輸入管理密碼"),
+          content: TextField(
+            controller: controller,
+            obscureText: true,
+            decoration: InputDecoration(
+              labelText: "密碼",
+            ),
+          ),
+          actions: [
+            TextButton(
+              child: Text("取消"),
+              onPressed: () => Navigator.of(context).pop(false),
+            ),
+            TextButton(
+              child: Text("解鎖"),
+              onPressed: () {
+                // SHA256 hash check
+                if (controller.text.isNotEmpty) {
+                  final bytes = utf8.encode(controller.text.trim());
+                  final digest = sha256.convert(bytes).toString();
+                  const validHash = 'c2f6e9d221f90b59e1e3362897b2f06170e07f4e29b632312f5b24aef09a4f99';
+                  if (digest == validHash) {
+                    Navigator.of(context).pop(true);
+                  } else {
+                    Navigator.of(context).pop(false);
+                  }
+                } else {
+                  Navigator.of(context).pop(false);
+                }
+              },
+            ),
+          ],
+        );
+      },
+    );
+
+    if (result == true) {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool("server_locked", false);
+      setState(() {
+        serverLocked = false;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("✅ 已解除鎖定，可修改 Server 設定")),
+      );
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("❌ 密碼錯誤，未解鎖")),
+      );
+    }
+  }
+
   ConnectionManagerState() {
     gFFI.serverModel.tabController.onSelected = (client_id_str) {
       final client_id = int.tryParse(client_id_str);
@@ -151,6 +231,14 @@ class ConnectionManagerState extends State<ConnectionManager>
   @override
   void initState() {
     gFFI.serverModel.updateClientState();
+    SharedPreferences.getInstance().then((prefs) {
+      setState(() {
+        serverLocked = prefs.getBool("server_locked") ?? true;
+      });
+      if (serverLocked) {
+        _enforceLockRestrictions();
+      }
+    });
     WidgetsBinding.instance.addObserver(this);
     super.initState();
   }
@@ -175,10 +263,24 @@ class ConnectionManagerState extends State<ConnectionManager>
     return serverModel.clients.isEmpty
         ? Column(
             children: [
+              if (serverLocked)
+                Container(
+                  width: double.infinity,
+                  color: Colors.yellow[100],
+                  padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 16),
+                  child: Text(
+                    translate("⚠️ Server connection is restricted by admin."),
+                    style: TextStyle(color: Colors.black87),
+                  ),
+                ),
               buildTitleBar(),
               Expanded(
                 child: Center(
-                  child: Text(translate("Waiting")),
+                  child: Text(
+                    serverLocked
+                        ? translate("Server is locked. Connection target cannot be modified.")
+                        : translate("Waiting"),
+                  ),
                 ),
               ),
             ],
@@ -299,6 +401,12 @@ class ConnectionManagerState extends State<ConnectionManager>
               ),
             ),
           ),
+          if (serverLocked)
+            IconButton(
+              icon: Icon(Icons.lock_outline),
+              tooltip: "解鎖 Server 限制",
+              onPressed: () => _tryUnlockServerSetting(context),
+            ),
           const SizedBox(
             width: 4.0,
           ),
