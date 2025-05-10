@@ -85,6 +85,7 @@ dependencies:
   password_strength: ^0.2.0
   flutter_launcher_icons: ^0.13.1
   flutter_keyboard_visibility: ^5.4.0
+  shared_preferences: ^2.2.2
   texture_rgba_renderer:
     git:
       url: https://github.com/rustdesk-org/flutter_texture_rgba_renderer
